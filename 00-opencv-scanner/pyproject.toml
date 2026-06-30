@@ -1,0 +1,26 @@
+[project]
+name="opencv-scanner"
+version= "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "opencv-python>=4.13.0.92",
+]
+
+[tool.ruff]
+target-version = "py312"
+include = ["**.py"]
+
+[tool.basedpyright]
+include = ["**.py"]
+reportMissingImports = "error"
+reportMissingTypeStubs = false
+reportUnusedCallResult = false
+pythonVersion = "3.12"
+typeCheckingMode = "recommended"
+venv=".venv"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.31.7",
+    "ruff>=0.14.0",
+]

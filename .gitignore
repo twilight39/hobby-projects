@@ -1,0 +1,11 @@
+# Python virtual environments
+.venv/
+venv/
+
+# Editor settings
+.zed/
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
