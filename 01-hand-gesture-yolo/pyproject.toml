@@ -1,0 +1,30 @@
+[project]
+name = "01-hand-gesture-yolo"
+version = "0.1.0"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy>=1.26",
+    "opencv-python>=4.13.0.92",
+    "ultralytics>=8.4.84",
+]
+
+[tool.ruff]
+target-version = "py312"
+include = ["**.py"]
+
+[tool.basedpyright]
+include = ["**.py"]
+reportMissingImports = "error"
+reportMissingTypeStubs = false
+reportUnusedCallResult = false
+pythonVersion = "3.12"
+typeCheckingMode = "recommended"
+venv=".venv"
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.31.7",
+    "ipykernel>=7.3.0",
+    "ruff>=0.14.0",
+]

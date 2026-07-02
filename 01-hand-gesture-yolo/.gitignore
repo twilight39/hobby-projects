@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Dataset and model artifacts
+data/
+runs/
+models/
+demos/
+*.pt
+*.pth
+*.onnx
+*.mlmodel
+*.mlpackage
+*.engine
+*.tflite
+
+# Logs and caches
+*.log
+.basedpyright/
+.ruff_cache/
+.ipynb_checkpoints/
+*.cache
+
+# Editor swap files
+*.swp
+*.swo
+.DS_Store
+
+# Generated YOLO dataset config (run data_setup.py to recreate)
+config.yaml
