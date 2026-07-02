@@ -22,15 +22,6 @@ OpenCV is the main gap before moving on to YOLO-based projects. This project for
 | ... | Perspective transform | `cv2.getPerspectiveTransform`, `cv2.warpPerspective` |
 | ... | Drawing | `cv2.drawContours`, `cv2.polylines`, `cv2.line` |
 
-## Document scanner pipeline
-
-1. Capture a frame from the webcam.
-2. Convert to grayscale and blur to reduce noise.
-3. Run Canny edge detection.
-4. Find contours and select the largest 4-sided polygon.
-5. Compute a perspective transform to a rectangle.
-6. Save the flattened document image.
-
 ## Files
 
 - `01_core.py` — image I/O basics
@@ -50,9 +41,3 @@ Module `05_caleb3d.py` uses the real chessboard calibration images from AlphaPix
 
 The images are extracted to `assets/alphapixel_calibration/`.
 
-## Applications
-
-- Document scanning apps
-- Receipt digitization
-- Flattening whiteboard or paper captures
-- Preprocessing step for OCR pipelines
