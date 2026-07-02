@@ -22,5 +22,6 @@ venv=".venv"
 [dependency-groups]
 dev = [
     "basedpyright>=1.31.7",
+    "ipykernel>=7.3.0",
     "ruff>=0.14.0",
 ]
