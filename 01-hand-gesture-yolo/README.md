@@ -8,9 +8,9 @@ Detects and classifies hand gestures from a webcam feed in real time. The pipeli
 
 ## Demo
 
-<video src="https://raw.githubusercontent.com/twilight39/hobby-projects/main/01-hand-gesture-yolo/demos/gesture_demo.mp4" controls width="640"></video>
+![Hand gesture detection demo](demos/gesture_demo.gif)
 
-If the video doesn't play above, [download it directly](https://github.com/twilight39/hobby-projects/raw/main/01-hand-gesture-yolo/demos/gesture_demo.mp4).
+Recorded with `demo.py` on Apple Silicon (MPS). The original MP4 is available at [`demos/gesture_demo.mp4`](demos/gesture_demo.mp4).
 
 ## Gesture Classes
 
