@@ -1,0 +1,8 @@
+# Direct dependencies for reviewers who prefer pip over uv.
+# For a fully locked environment, use uv with uv.lock instead.
+numpy>=1.26
+opencv-python>=4.13.0.92
+ultralytics>=8.4.84
+onnx>=1.22.0
+onnxruntime>=1.27.0
+onnxslim>=0.1.94

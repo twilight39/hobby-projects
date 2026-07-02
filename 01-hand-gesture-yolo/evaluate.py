@@ -11,6 +11,8 @@ import json
 import sys
 from pathlib import Path
 
+import torch
+import yaml
 from ultralytics import YOLO
 
 
@@ -67,7 +69,129 @@ def parse_args() -> argparse.Namespace:
         default="val",
         help="Name of the validation run.",
     )
+    parser.add_argument(
+        "--mean-iou",
+        action="store_true",
+        help="Compute a standalone mean IoU over matched predictions/labels.",
+    )
     return parser.parse_args()
+
+
+def _bbox_iou_matrix(boxes_a: torch.Tensor, boxes_b: torch.Tensor) -> torch.Tensor:
+    """Compute pairwise IoU between two sets of xyxy boxes."""
+    area_a = (boxes_a[:, 2] - boxes_a[:, 0]) * (boxes_a[:, 3] - boxes_a[:, 1])
+    area_b = (boxes_b[:, 2] - boxes_b[:, 0]) * (boxes_b[:, 3] - boxes_b[:, 1])
+
+    inter_xmin = torch.max(boxes_a[:, None, 0], boxes_b[None, :, 0])
+    inter_ymin = torch.max(boxes_a[:, None, 1], boxes_b[None, :, 1])
+    inter_xmax = torch.min(boxes_a[:, None, 2], boxes_b[None, :, 2])
+    inter_ymax = torch.min(boxes_a[:, None, 3], boxes_b[None, :, 3])
+
+    inter_w = (inter_xmax - inter_xmin).clamp(min=0)
+    inter_h = (inter_ymax - inter_ymin).clamp(min=0)
+    inter = inter_w * inter_h
+
+    union = area_a[:, None] + area_b[None, :] - inter + 1e-6
+    return inter / union
+
+
+def compute_mean_iou(
+    model: YOLO,
+    data_config: Path,
+    split: str,
+    imgsz: int,
+    device: str,
+    conf: float = 0.25,
+    iou_thresh: float = 0.5,
+) -> float:
+    """
+    Compute mean IoU of true-positive detections on the chosen split.
+
+    Each prediction is greedily matched to the highest-IoU ground-truth box of
+    the same class. The returned value is the average IoU of all matches above
+    `iou_thresh`.
+    """
+    cfg = yaml.safe_load(data_config.read_text(encoding="utf-8"))
+    base_path = Path(cfg["path"]).expanduser().resolve()
+    image_dir = base_path / cfg[split]
+    label_dir = base_path / cfg[split].replace("images", "labels")
+
+    image_paths = sorted(image_dir.glob("*.jpg")) + sorted(image_dir.glob("*.png"))
+    if not image_paths:
+        raise ValueError(f"No images found in {image_dir}")
+
+    ious: list[float] = []
+    for img_path in image_paths:
+        label_path = label_dir / f"{img_path.stem}.txt"
+        if not label_path.exists():
+            continue
+
+        # Ground-truth boxes: YOLO normalized xywh -> xyxy (absolute)
+        gt_lines = label_path.read_text(encoding="utf-8").strip().splitlines()
+        gt_boxes = []
+        gt_classes = []
+        for line in gt_lines:
+            if not line.strip():
+                continue
+            cls, cx, cy, w, h = map(float, line.split())
+            gt_classes.append(int(cls))
+            gt_boxes.append([cx, cy, w, h])
+
+        if not gt_boxes:
+            continue
+
+        result = model.predict(
+            str(img_path),
+            imgsz=imgsz,
+            device=device,
+            conf=conf,
+            verbose=False,
+        )[0]
+
+        if result.boxes is None or len(result.boxes) == 0:
+            continue
+
+        h, w = result.orig_shape[:2]
+        gt = torch.tensor(gt_boxes, dtype=torch.float32)
+        gt[:, [0, 2]] *= w
+        gt[:, [1, 3]] *= h
+        gt_xyxy = torch.stack(
+            [
+                gt[:, 0] - gt[:, 2] / 2,
+                gt[:, 1] - gt[:, 3] / 2,
+                gt[:, 0] + gt[:, 2] / 2,
+                gt[:, 1] + gt[:, 3] / 2,
+            ],
+            dim=1,
+        )
+        gt_classes_t = torch.tensor(gt_classes, dtype=torch.long)
+
+        pred_xyxy = result.boxes.xyxy.cpu()
+        pred_classes = result.boxes.cls.cpu().long()
+        pred_conf = result.boxes.conf.cpu()
+
+        # Greedily match predictions to ground truth of the same class.
+        order = torch.argsort(pred_conf, descending=True)
+        pred_xyxy = pred_xyxy[order]
+        pred_classes = pred_classes[order]
+        matched_gt = torch.zeros(len(gt_xyxy), dtype=torch.bool)
+
+        for i in range(len(pred_xyxy)):
+            same_class = gt_classes_t == pred_classes[i]
+            if not same_class.any():
+                continue
+            candidate_ious = _bbox_iou_matrix(
+                pred_xyxy[i : i + 1], gt_xyxy[same_class]
+            )[0]
+            best_iou, best_idx = candidate_ious.max(dim=0)
+            original_idx = torch.nonzero(same_class, as_tuple=False)[best_idx].item()
+            if best_iou >= iou_thresh and not matched_gt[original_idx]:
+                matched_gt[original_idx] = True
+                ious.append(best_iou.item())
+
+    if not ious:
+        return 0.0
+    return float(sum(ious) / len(ious))
 
 
 def main() -> int:
@@ -106,16 +230,22 @@ def main() -> int:
         name=args.name,
     )
 
+    # Note: Ultralytics' mean_results() returns [mp, mr, map50, map].
+    # Index [0] is mean precision, not IoU. We compute a real mean IoU below.
     results = {
         "mAP50": round(metrics.box.map50, 4),
         "mAP50-95": round(metrics.box.map, 4),
         "mAP75": round(metrics.box.map75, 4),
         "precision": round(metrics.box.mp, 4),
         "recall": round(metrics.box.mr, 4),
-        "mean_iou": round(metrics.box.mean_results()[0], 4)
-        if hasattr(metrics.box, "mean_results")
-        else None,
     }
+
+    if args.mean_iou:
+        print("\nComputing mean IoU over matched predictions...")
+        mean_iou = compute_mean_iou(
+            model, args.data, args.split, args.imgsz, args.device
+        )
+        results["mean_iou"] = round(mean_iou, 4)
 
     print("\nMetrics:")
     for key, value in results.items():

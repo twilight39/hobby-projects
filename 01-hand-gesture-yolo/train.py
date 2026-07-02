@@ -56,6 +56,8 @@ def _mps_safe_preprocess(
     return _ORIG_PREPROCESS(self, targets, batch_size, scale_tensor)
 
 
+# Apply the patch so MPS training survives batches with empty targets
+# (e.g., no_gesture images), which otherwise crash inside the loss preprocessor.
 v8DetectionLoss.preprocess = _mps_safe_preprocess
 
 

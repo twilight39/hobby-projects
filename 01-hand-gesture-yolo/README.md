@@ -6,6 +6,10 @@ A YOLOv8-based hand gesture recognition project for real-time edge inference. Bu
 
 Detects and classifies hand gestures from a webcam feed in real time. The pipeline covers the full ML lifecycle: dataset preparation, model fine-tuning, evaluation, export to edge formats, and live inference.
 
+## Demo
+
+<video src="demos/gesture_demo.mp4" controls width="640"></video>
+
 ## Gesture Classes
 
 | Class ID | Gesture | Use Case |
@@ -27,6 +31,7 @@ Fine-tuned `yolov8n.pt` on a 5,000-image HaGRID 512px subset (1,000 images per c
 | mAP75 | — | **0.931** |
 | Precision | — | **0.984** |
 | Recall | — | **0.976** |
+| Mean IoU | — | **0.889** |
 
 Per-class test performance:
 
@@ -40,13 +45,89 @@ Per-class test performance:
 
 `no_gesture` is the weakest class, which is typical for a background/idle class: the hand is present but not in a discriminative pose, so it is visually closer to the other classes.
 
+Detailed evaluation plots, example predictions, and the formal metrics file live under `results/`. See [`METRICS.md`](METRICS.md) for the full metrics report.
+
+## How It Works
+
+A short design overview for reviewers and interviewers.
+
+### Why YOLOv8n?
+
+We chose **YOLOv8n** (the nano variant) because this project targets real-time edge inference:
+
+- **Small:** ~3 M parameters, 5.9 MB in PyTorch.
+- **Fast:** >45 FPS on a laptop CPU at 320 px; >80 FPS with ONNX Runtime.
+- **Good enough:** Hand gestures are visually simple objects with clear shapes. For five classes, YOLOv8n has plenty of capacity, and the metrics confirm it (mAP50 = 0.99).
+- **Easy to deploy:** Ultralytics exports cleanly to ONNX and CoreML.
+
+If we later needed higher mAP50-95 on the harder `no_gesture` class, the next step would be YOLOv8s or 640 px input — but only after confirming the latency budget allows it.
+
+### Why These 5 Classes?
+
+The classes map directly to common UI/control gestures:
+
+| Gesture | Mapped action |
+|---------|---------------|
+| `open_palm` | Play / resume |
+| `closed_fist` | Stop / pause |
+| `thumbs_up` | Confirm / next |
+| `peace_sign` | Select / option 2 |
+| `no_gesture` | Idle / background |
+
+Five classes keep the dataset small (5,000 images), the model fast, and the demo easy to understand. `no_gesture` is included as a first-class class so the system can explicitly report “idle” rather than hallucinating one of the other gestures when no hand is present.
+
+### Data Preparation
+
+We use the [HaGRID v2 512px](https://github.com/hukenovs/hagrid) dataset. `data_setup.py`:
+
+1. Loads JSON annotations for the 5 target classes.
+2. Samples 1,000 images per class deterministically (seed = 42).
+3. **Splits by `user_id`** before creating train/val/test sets. This is the key anti-leakage step: the same person never appears in both training and testing.
+4. Extracts only the sampled images from the 119 GB zip archive.
+5. Converts HaGRID `[x_min, y_min, width, height]` boxes to YOLO normalized `[x_center, y_center, width, height]` format.
+6. Writes `config.yaml`.
+
+### Augmentation Strategy
+
+We deliberately **do not use a custom augmentation pipeline**. Instead we rely on:
+
+- **YOLOv8’s built-in augmentation:** mosaic, HSV jitter, flips, scale/translate, and random cropping during training.
+- **HaGRID’s natural diversity:** tens of thousands of different people, lighting conditions, backgrounds, and camera angles.
+
+For this dataset, hand-crafting augmentations adds complexity without clear benefit and risks distorting hand shapes. The built-in augmentations plus the dataset’s inherent variety are sufficient.
+
+### Training
+
+`train.py` fine-tunes the pretrained COCO weights with:
+
+- `imgsz=320` for speed.
+- `batch=16`.
+- AdamW optimizer (auto-selected by Ultralytics).
+- 50 epochs with early stopping patience of 10.
+
+The model trains on Apple MPS. A small monkey-patch routes the detection-loss preprocessing through CPU for MPS batches that contain empty targets (from `no_gesture` images), avoiding a known MPS bug.
+
+### Deployment Approach
+
+The intended deployment path is:
+
+1. **Export** the trained `.pt` model to ONNX (`export.py --format onnx`) or CoreML (`export.py --format coreml`).
+2. **Benchmark** the exported model on the target hardware.
+3. **Run inference** with a minimal runtime:
+   - ONNX Runtime for cross-platform deployment (Linux, Windows, Raspberry Pi, Jetson).
+   - CoreML on Apple Silicon / iOS for Neural Engine acceleration.
+4. **Post-process** the raw outputs (decode boxes, NMS, map class IDs to actions) in the application layer.
+
+For concrete edge targets, see the **Edge Deployment** section below.
+
 ## Quick Start
 
 This project uses [`uv`](https://docs.astral.sh/uv/) for dependency management.
 
 ```bash
-# Install dependencies
+# Install dependencies (uv is preferred; pip works too)
 uv sync
+# or: python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
 
 # Download the HaGRID v2 512px image archive (~128 GB) and annotations (~720 MB)
 # from https://github.com/hukenovs/hagrid and place them under:
@@ -137,6 +218,16 @@ Supported formats:
 
 Each export produces a `.benchmark.json` file with latency, FPS, file size, and device info.
 
+Example benchmark on Apple M1 Pro (320 px input, 100 runs):
+
+| Runtime | Device | Latency (ms) | FPS |
+|---------|--------|--------------|-----|
+| PyTorch | MPS | 11.84 | 84.5 |
+| PyTorch | CPU | 22.00 | 45.5 |
+| ONNX Runtime | CPU | 14.08 | 71.0 |
+
+> **Note:** ONNX Runtime does not provide an MPS execution provider on macOS, so the exported ONNX model is benchmarked on CPU. Use the CoreML export for Apple GPU/Neural Engine inference.
+
 ```bash
 # ONNX on CPU
 uv run python export.py --format onnx --device cpu
@@ -145,25 +236,42 @@ uv run python export.py --format onnx --device cpu
 uv run python export.py --format coreml --device mps
 ```
 
+## Edge Deployment
+
+The exported model is sized for embedded and edge boards. Suggested deployment targets:
+
+| Platform | Runtime | Notes |
+|----------|---------|-------|
+| Raspberry Pi 4/5 | ONNX Runtime (CPU) | Use the ONNX export and 320 px input. Expect ~30–50 ms/frame depending on thread count and quantization. |
+| NVIDIA Jetson Nano / Orin | TensorRT via ONNX | Convert the ONNX file to a TensorRT engine for GPU/NPU acceleration. |
+| Apple Silicon / iOS | CoreML | Export with `--format coreml`. The model can run on the Apple Neural Engine with sub-frame latency. |
+| x86 / AMD64 edge PC | ONNX Runtime / OpenVINO | Use OpenVINO for Intel integrated graphics or CPU inference. |
+
+Keep the input resolution at 320 px unless accuracy needs dominate latency needs. If you need higher mAP on `no_gesture`, retrain at 640 px or switch to `yolov8s`.
+
 ## Real-Time Inference
 
 `infer.py` runs the model on a webcam or video file:
 
 ```bash
-uv run python infer.py --source 0 --device cpu
+uv run python infer.py --source 0 --device mps
 ```
 
 `demo.py` records an annotated demo video:
 
 ```bash
-uv run python demo.py --duration 60 --output demos/gesture_demo.mp4
+uv run python demo.py --duration 60 --device mps --output demos/gesture_demo.mp4
 ```
+
+Use `--device mps` on Apple Silicon for much higher FPS; the default is `cpu`.
 
 ## Project Structure
 
 ```text
 .
-├── README.md              # This file
+├── README.md              # This file (includes design rationale and deployment notes)
+├── METRICS.md             # Full metrics report and benchmark details
+├── requirements.txt       # pip fallback for non-uv users
 ├── pyproject.toml         # uv dependencies and tool config
 ├── uv.lock                # Locked dependency versions
 ├── .python-version        # Python version for uv
@@ -179,6 +287,7 @@ uv run python demo.py --duration 60 --output demos/gesture_demo.mp4
 │       ├── raw/           # Downloaded zip + annotations
 │       └── processed/     # Sampled images and labels
 ├── runs/                  # Training outputs (gitignored)
+├── results/               # Evaluation plots, metrics, and example predictions
 ├── demos/                 # Demo videos (gitignored)
 └── models/                # Exported models (gitignored)
 ```

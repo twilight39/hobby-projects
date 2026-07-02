@@ -103,8 +103,12 @@ def main() -> int:
 
     model = YOLO(str(args.weights))
 
+    # Benchmark the original PyTorch model first
+    print("\nBenchmarking original PyTorch model...")
+    pt_bench = benchmark(model, args.imgsz, args.device, args.benchmark_runs)
+
     # Export
-    print(f"Exporting to {args.format.upper()}...")
+    print(f"\nExporting to {args.format.upper()}...")
     export_path = model.export(
         format=args.format,
         imgsz=args.imgsz,
@@ -115,8 +119,15 @@ def main() -> int:
 
     # Benchmark the exported model
     exported_model = YOLO(str(export_path))
-    bench = benchmark(
-        exported_model, args.imgsz, args.device, args.benchmark_runs
+    bench_device = args.device
+    if args.format == "onnx" and args.device == "mps":
+        print(
+            "Note: ONNX Runtime has no MPS execution provider on macOS; "
+            "benchmarking exported ONNX on CPU."
+        )
+        bench_device = "cpu"
+    export_bench = benchmark(
+        exported_model, args.imgsz, bench_device, args.benchmark_runs
     )
 
     # Collect and save benchmark metadata
@@ -128,8 +139,11 @@ def main() -> int:
         "export_path": str(export_file.resolve()),
         "export_size_bytes": export_file.stat().st_size,
         "image_size": args.imgsz,
-        "benchmark_device": args.device,
-        **bench,
+        "pytorch_device": args.device,
+        "pytorch_avg_latency_ms": pt_bench["avg_latency_ms"],
+        "pytorch_fps": pt_bench["fps"],
+        "benchmark_device": bench_device,
+        **export_bench,
     }
 
     metadata_path = export_file.with_suffix(".benchmark.json")
